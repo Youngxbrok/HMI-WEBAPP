@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TitanControl-HMI · Verificación Biométrica</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #050a0f; --panel: #0b1520; --border: #1a3a5c;
+      --accent: #00d4ff; --accent2: #ff6b35;
+      --text: #c8dde8; --text-dim: #4a7a99;
+      --success: #00ff88; --danger: #ff3355;
+      --warn: #ffd700;
+      --font-hud: 'Rajdhani', sans-serif;
+      --font-mono: 'Share Tech Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); font-family: var(--font-hud); color: var(--text);
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; overflow: hidden;
+    }
+    body::before {
+      content: ''; position: fixed; inset: 0;
+      background-image: linear-gradient(rgba(0,212,255,.04) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(0,212,255,.04) 1px, transparent 1px);
+      background-size: 40px 40px; animation: gridDrift 20s linear infinite;
+    }
+    @keyframes gridDrift { to { background-position: 40px 40px; } }
+    .scanlines { position: fixed; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.15) 2px, rgba(0,0,0,.15) 4px); pointer-events: none; z-index: 2; }
+
+    /* ── Layout ── */
+    .hud-header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      padding: 12px 32px;
+      background: rgba(5,10,15,.9);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .hud-title { font-size: 16px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; }
+    .hud-title span { color: var(--accent); }
+    .hud-user { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+
+    .main-grid {
+      position: relative; z-index: 3;
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 24px; padding: 80px 32px 32px;
+      width: 100%; max-width: 1000px;
+    }
+
+    /* ── Camera panel ── */
+    .cam-panel {
+      background: var(--panel); border: 1px solid var(--border);
+      padding: 0; overflow: hidden;
+      clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+    }
+    .cam-label {
+      padding: 10px 16px;
+      background: rgba(0,212,255,.06);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); letter-spacing: 2px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .cam-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .dot-red { background: var(--danger); box-shadow: 0 0 6px var(--danger); animation: pulse 1.5s infinite; }
+    .dot-green { background: var(--success); box-shadow: 0 0 6px var(--success); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    .video-wrapper {
+      position: relative;
+      background: #000;
+      aspect-ratio: 4/3;
+    }
+    #videoFeed {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      filter: contrast(1.1) saturate(.8);
+    }
+
+    /* Facial scan overlay */
+    .scan-overlay {
+      position: absolute; inset: 0;
+      pointer-events: none;
+    }
+    .face-frame {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 160px; height: 200px;
+      border: 2px solid var(--accent);
+      box-shadow: 0 0 20px rgba(0,212,255,.4), inset 0 0 20px rgba(0,212,255,.1);
+    }
+    .face-frame::before, .face-frame::after {
+      content: ''; position: absolute;
+      width: 20px; height: 20px;
+      border-color: var(--accent2); border-style: solid;
+    }
+    .face-frame::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; }
+    .face-frame::after  { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; }
+
+    .scan-line {
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: scanLine 2.5s ease-in-out infinite;
+      opacity: 0;
+    }
+    .scan-line.active { opacity: 1; }
+    @keyframes scanLine {
+      0%   { top: 10%; }
+      100% { top: 90%; }
+    }
+
+    .status-overlay {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 8px 12px;
+      background: rgba(0,0,0,.7);
+      font-family: var(--font-mono); font-size: 11px;
+      color: var(--accent); letter-spacing: 1px;
+      display: flex; justify-content: space-between;
+    }
+
+    /* ── Voice panel ── */
+    .voice-panel {
+      background: var(--panel); border: 1px solid var(--border);
+      clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+      display: flex; flex-direction: column;
+    }
+
+    .voice-label {
+      padding: 10px 16px;
+      background: rgba(255,107,53,.06);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); letter-spacing: 2px;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    /* Waveform visualizer */
+    .waveform-area {
+      padding: 20px 16px;
+      display: flex; align-items: center; justify-content: center; gap: 3px;
+      height: 80px; border-bottom: 1px solid var(--border);
+    }
+    .wave-bar {
+      width: 4px; background: var(--accent2); border-radius: 2px;
+      height: 10px; transform-origin: center;
+      transition: height .1s;
+    }
+    .wave-bar.active { animation: waveBounce .4s ease infinite; }
+    @keyframes waveBounce {
+      0%,100% { height: 10px; }
+      50%      { height: var(--h, 40px); }
+    }
+
+    /* Transcript box */
+    .transcript-area { flex: 1; padding: 16px; overflow-y: auto; }
+    .transcript-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); letter-spacing: 2px; margin-bottom: 10px; }
+    #transcriptText {
+      font-family: var(--font-mono); font-size: 13px; color: var(--text);
+      line-height: 1.7; min-height: 80px;
+      white-space: pre-wrap;
+    }
+    .cursor-blink { display: inline-block; width: 8px; height: 14px; background: var(--accent); animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 2px; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* Steps indicator */
+    .steps-bar {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 8px;
+    }
+    .step {
+      flex: 1; padding: 6px; text-align: center;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px;
+      border: 1px solid var(--border); color: var(--text-dim);
+      transition: all .3s;
+    }
+    .step.active { border-color: var(--warn); color: var(--warn); background: rgba(255,215,0,.06); }
+    .step.done   { border-color: var(--success); color: var(--success); background: rgba(0,255,136,.06); }
+
+    /* ── Bottom controls ── */
+    .controls {
+      max-width: 1000px; width: 100%;
+      padding: 0 32px 32px;
+      position: relative; z-index: 3;
+      display: flex; gap: 16px;
+    }
+    .btn {
+      flex: 1; padding: 14px; cursor: pointer;
+      font-family: var(--font-hud); font-size: 14px; font-weight: 700;
+      letter-spacing: 2px; text-transform: uppercase; border: 1px solid;
+      transition: all .25s; position: relative; overflow: hidden;
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+      background: transparent;
+    }
+    .btn::before { content: ''; position: absolute; inset: 0; transform: scaleX(0); transform-origin: left; transition: transform .25s; }
+    .btn:hover::before { transform: scaleX(1); }
+    .btn span { position: relative; z-index: 1; }
+
+    .btn-start { border-color: var(--success); color: var(--success); }
+    .btn-start::before { background: var(--success); }
+    .btn-start:hover { color: #000; }
+
+    .btn-cancel { border-color: var(--danger); color: var(--danger); }
+    .btn-cancel::before { background: var(--danger); }
+    .btn-cancel:hover { color: #fff; }
+
+    .btn:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+
+    /* ── Progress modal ── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85);
+      z-index: 100; align-items: center; justify-content: center;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal-box {
+      background: var(--panel); border: 1px solid var(--success);
+      padding: 40px 48px; text-align: center;
+      box-shadow: 0 0 40px rgba(0,255,136,.3);
+      clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 20px 100%, 0 calc(100% - 20px));
+      animation: modalIn .4s ease;
+    }
+    @keyframes modalIn { from{transform:scale(.8);opacity:0} to{transform:scale(1);opacity:1} }
+    .modal-icon { font-size: 48px; margin-bottom: 16px; animation: iconPop .5s .2s both; }
+    @keyframes iconPop { from{transform:scale(0)rotate(-20deg)} to{transform:scale(1)rotate(0)} }
+    .modal-title { font-size: 28px; font-weight: 700; letter-spacing: 4px; color: var(--success); margin-bottom: 8px; }
+    .modal-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); letter-spacing: 2px; }
+    .modal-bar { height: 2px; background: var(--border); margin: 20px 0; overflow: hidden; }
+    .modal-bar-fill { height: 100%; background: var(--success); animation: fillBar 2s linear forwards; box-shadow: 0 0 8px var(--success); }
+    @keyframes fillBar { from{width:0} to{width:100%} }
+  </style>
+</head>
+<body>
+<div class="scanlines"></div>
+
+<!-- HUD header -->
+<div class="hud-header">
+  <div class="hud-title">Titan<span>Control</span> · Verificación Biométrica</div>
+  <div class="hud-user">OPERARIO: <strong style="color:var(--accent)"><%= username.toUpperCase() %></strong></div>
+</div>
+
+<!-- Main grid -->
+<div class="main-grid">
+
+  <!-- Camera panel -->
+  <div class="cam-panel">
+    <div class="cam-label">
+      <span class="cam-dot dot-red" id="camDot"></span>
+      CAM-01 · FACIAL SCAN
+    </div>
+    <div class="video-wrapper">
+      <video id="videoFeed" autoplay muted playsinline></video>
+      <div class="scan-overlay">
+        <div class="face-frame"></div>
+        <div class="scan-line" id="scanLine"></div>
+      </div>
+      <div class="status-overlay">
+        <span id="camStatus">AGUARDANDO INICIO...</span>
+        <span id="camTimer">--:--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Voice panel -->
+  <div class="voice-panel">
+    <div class="voice-label">
+      <span class="cam-dot" id="micDot" style="background:var(--text-dim)"></span>
+      MIC-01 · VOICE RECOGNITION
+    </div>
+
+    <!-- Waveform -->
+    <div class="waveform-area" id="waveform">
+      <!-- JS will generate bars -->
+    </div>
+
+    <!-- Transcript -->
+    <div class="transcript-area">
+      <div class="transcript-label">// TRANSCRIPCIÓN EN TIEMPO REAL</div>
+      <div id="transcriptText"><span style="color:var(--text-dim)">Esperando activación del micrófono...</span></div>
+    </div>
+
+    <!-- Steps -->
+    <div class="steps-bar">
+      <div class="step" id="step1">CÁMARA</div>
+      <div class="step" id="step2">VOZ</div>
+      <div class="step" id="step3">VERIFICANDO</div>
+      <div class="step" id="step4">ACCESO</div>
+    </div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <button class="btn btn-start" id="btnStart" onclick="startBiometric()">
+    <span>▶ &nbsp; Iniciar Escaneo</span>
+  </button>
+  <button class="btn btn-cancel" onclick="cancelBiometric()">
+    <span>✕ &nbsp; Cancelar</span>
+  </button>
+</div>
+
+<!-- Success modal -->
+<div class="modal-overlay" id="successModal">
+  <div class="modal-box">
+    <div class="modal-icon">✓</div>
+    <div class="modal-title">IDENTIDAD VERIFICADA</div>
+    <div class="modal-sub">ACCESO CONCEDIDO · REDIRECCIONANDO A DASHBOARD</div>
+    <div class="modal-bar"><div class="modal-bar-fill"></div></div>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────
+  let videoStream       = null;
+  let recognition       = null;
+  let finalTranscript   = '';
+  let interimTranscript = '';
+  let scanTimer         = null;
+  let timerSeconds      = 0;
+  let faceScanDone      = false;
+  let voiceScanDone     = false;
+
+  // ── Generate waveform bars ─────────────────────────────────
+  const waveform = document.getElementById('waveform');
+  for (let i = 0; i < 30; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'wave-bar';
+    bar.style.setProperty('--h', Math.random() * 40 + 10 + 'px');
+    waveform.appendChild(bar);
+  }
+
+  // ── Timer helper ───────────────────────────────────────────
+  function startTimer() {
+    timerSeconds = 0;
+    clearInterval(scanTimer);
+    scanTimer = setInterval(() => {
+      timerSeconds++;
+      const m = String(Math.floor(timerSeconds/60)).padStart(2,'0');
+      const s = String(timerSeconds%60).padStart(2,'0');
+      document.getElementById('camTimer').textContent = `${m}:${s}`;
+    }, 1000);
+  }
+
+  function setStep(n) {
+    ['step1','step2','step3','step4'].forEach((id, i) => {
+      const el = document.getElementById(id);
+      el.className = 'step' + (i < n-1 ? ' done' : i === n-1 ? ' active' : '');
+    });
+  }
+
+  // ── Camera access ──────────────────────────────────────────
+  async function startCamera() {
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      document.getElementById('videoFeed').srcObject = videoStream;
+      document.getElementById('camDot').className = 'cam-dot dot-green';
+      document.getElementById('camStatus').textContent = 'ESCANEO FACIAL ACTIVO';
+      document.getElementById('scanLine').classList.add('active');
+
+      // Simulate face detection after 4 seconds
+      setTimeout(() => {
+        faceScanDone = true;
+        document.getElementById('camStatus').textContent = 'ROSTRO DETECTADO ✓';
+        if (voiceScanDone) completeBiometric();
+      }, 4000);
+
+    } catch (err) {
+      document.getElementById('camStatus').textContent = 'CÁMARA NO DISPONIBLE — MODO SIMULADO';
+      // Still allow progression in simulation mode
+      setTimeout(() => {
+        faceScanDone = true;
+        if (voiceScanDone) completeBiometric();
+      }, 4000);
+    }
+  }
+
+  // ── Web Speech API ─────────────────────────────────────────
+  function startVoiceRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      // Fallback if browser doesn't support it
+      document.getElementById('transcriptText').innerHTML =
+        '<span style="color:var(--warn)">Web Speech API no disponible en este navegador.</span><br>' +
+        '<span style="color:var(--text-dim)">Simulando captura de voz...</span>';
+      document.getElementById('micDot').style.background = 'var(--warn)';
+
+      setTimeout(() => {
+        finalTranscript = '[VOICE SIMULATED] Operario verificado — acceso autorizado';
+        voiceScanDone = true;
+        renderTranscript();
+        stopWaveAnimation();
+        if (faceScanDone) completeBiometric();
+      }, 5000);
+      return;
+    }
+
+    recognition = new SpeechRecognition();
+    recognition.lang          = 'es-ES';
+    recognition.continuous    = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    document.getElementById('micDot').style.cssText = 'background:var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 1s infinite;';
+
+    recognition.onresult = (event) => {
+      interimTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += t + ' ';
+          // Consider voice scan done after first final result
+          if (!voiceScanDone) {
+            voiceScanDone = true;
+            setTimeout(() => {
+              if (faceScanDone) completeBiometric();
+            }, 1500);
+          }
+        } else {
+          interimTranscript += t;
+        }
+      }
+      renderTranscript();
+    };
+
+    recognition.onerror = (event) => {
+      console.warn('Speech error:', event.error);
+      // Still proceed if face scan is done
+      if (!voiceScanDone) {
+        finalTranscript = '[ERROR DE VOZ — BYPASSED]';
+        voiceScanDone = true;
+        renderTranscript();
+        if (faceScanDone) completeBiometric();
+      }
+    };
+
+    recognition.start();
+    animateWave();
+
+    // Auto-stop after 20 seconds
+    setTimeout(() => {
+      if (!voiceScanDone) {
+        voiceScanDone = true;
+        finalTranscript = finalTranscript || '[TIEMPO AGOTADO]';
+        renderTranscript();
+        if (faceScanDone) completeBiometric();
+      }
+    }, 20000);
+  }
+
+  function renderTranscript() {
+    const el = document.getElementById('transcriptText');
+    el.innerHTML = `<span style="color:var(--accent)">${finalTranscript}</span>` +
+      (interimTranscript
+        ? `<span style="color:var(--text-dim)">${interimTranscript}</span>`
+        : '') +
+      '<span class="cursor-blink"></span>';
+  }
+
+  function animateWave() {
+    document.querySelectorAll('.wave-bar').forEach(b => b.classList.add('active'));
+  }
+  function stopWaveAnimation() {
+    document.querySelectorAll('.wave-bar').forEach(b => b.classList.remove('active'));
+    document.getElementById('micDot').style.cssText = 'background:var(--success); box-shadow: 0 0 6px var(--success);';
+  }
+
+  // ── Main start function ────────────────────────────────────
+  function startBiometric() {
+    document.getElementById('btnStart').disabled = true;
+    setStep(1);
+    startTimer();
+    startCamera();
+
+    setTimeout(() => {
+      setStep(2);
+      startVoiceRecognition();
+    }, 2000);
+  }
+
+  // ── Complete biometric flow ────────────────────────────────
+  async function completeBiometric() {
+    clearInterval(scanTimer);
+    stopWaveAnimation();
+    if (recognition) recognition.stop();
+    setStep(3);
+
+    // Brief "verifying" pause
+    await new Promise(r => setTimeout(r, 1500));
+    setStep(4);
+
+    // Show success modal
+    document.getElementById('successModal').classList.add('show');
+
+    // Notify server
+    try {
+      const resp = await fetch('/api/biometric/pass', {
+        method : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ voiceTranscript: finalTranscript.trim() })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setTimeout(() => { window.location.href = data.redirect; }, 2200);
+      }
+    } catch (err) {
+      setTimeout(() => { window.location.href = '/dashboard'; }, 2200);
+    }
+  }
+
+  // ── Cancel ─────────────────────────────────────────────────
+  async function cancelBiometric() {
+    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+    if (recognition) recognition.stop();
+    clearInterval(scanTimer);
+    await fetch('/api/biometric/fail', { method: 'POST' });
+    window.location.href = '/login';
+  }
+</script>
+</body>
+</html>

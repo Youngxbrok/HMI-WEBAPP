@@ -32,7 +32,7 @@ titancontrol/
 ```bash
 npm install
 npm start
-# → http://localhost:3000
+# → http://localhost:1943
 # Credenciales: admin@titancontrol.io / Titan2024!
 ```
 
@@ -40,7 +40,7 @@ npm start
 
 ```bash
 docker build -t titancontrol-hmi .
-docker run -p 3000:3000 -v titancontrol_data:/data titancontrol-hmi
+docker run -p 1943:1943 -v titancontrol_data:/data titancontrol-hmi
 ```
 
 ## Flujo de autenticación

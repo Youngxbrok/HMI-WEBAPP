@@ -40,7 +40,7 @@ npm start
 
 ```bash
 docker build -t titancontrol-hmi .
-docker run -p 3000:3000 -v titancontrol_data:/data titancontrol-hmi
+docker run -p 0943:0943 -v titancontrol_data:/data titancontrol-hmi
 ```
 
 ## Flujo de autenticación

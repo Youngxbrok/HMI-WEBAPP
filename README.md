@@ -32,7 +32,7 @@ titancontrol/
 ```bash
 npm install
 npm start
-# → http://localhost:3000
+# → http://localhost:0943
 # Credenciales: admin@titancontrol.io / Titan2024!
 ```
 
